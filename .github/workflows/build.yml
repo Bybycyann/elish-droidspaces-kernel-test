@@ -37,16 +37,12 @@ jobs:
           git clone -b elish-r-oss --depth=1 \
             https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
 
-      # ---------- 4) 下载 AOSP clang ----------
-      # 版本号替换成你验证过的那个
-      - name: Fetch AOSP clang
+      # ---------- 4) 安装 clang ----------
+      - name: Install clang
         run: |
-          mkdir -p tc/clang
-          wget -q \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r498229b.tar.gz" \
-            -O clang.tar.gz
-          tar xzf clang.tar.gz -C tc/clang
-          ./tc/clang/bin/clang --version
+          sudo apt-get install -y clang lld
+          clang --version
+          ld.lld --version
 
       # ---------- 5) 合入 Droidspaces 配置 ----------
       - name: Apply Droidspaces config
@@ -95,7 +91,6 @@ jobs:
           set -e
           cd kernel
           export ARCH=arm64 SUBARCH=arm64
-          export PATH="$PWD/../tc/clang/bin:$PATH"
           make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- elish_user_defconfig
 
@@ -115,7 +110,6 @@ jobs:
         run: |
           cd kernel
           export ARCH=arm64 SUBARCH=arm64
-          export PATH="$PWD/../tc/clang/bin:$PATH"
           make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                -j$(nproc) Image
