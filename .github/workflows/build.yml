@@ -110,9 +110,22 @@ jobs:
         run: |
           cd kernel
           export ARCH=arm64 SUBARCH=arm64
+
+          echo "===== 工具链自检 ====="
+          clang --version | head -2
+          which aarch64-linux-gnu-as aarch64-linux-gnu-elfedit aarch64-linux-gnu-ld || true
+
+          echo "===== 修 1：移除 -no-integrated-as，改用 clang 集成汇编器 ====="
+          sed -i '/-no-integrated-as/d' Makefile
+          grep -c 'no-integrated-as' Makefile || echo "已移除"
+
+          echo "===== 修 2：host 工具补 -fcommon ====="
           make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               GCC_TOOLCHAIN_DIR=/usr/bin/ \
+               HOST_EXTRACFLAGS="-fcommon" \
                -j$(nproc) Image
+          
 
       # ---------- 9) 上传产物 ----------
       - name: Upload artifacts
