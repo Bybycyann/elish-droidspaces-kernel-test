@@ -113,17 +113,21 @@ jobs:
 
           echo "===== 工具链自检 ====="
           clang --version | head -2
-          which aarch64-linux-gnu-as aarch64-linux-gnu-elfedit aarch64-linux-gnu-ld || true
 
-          echo "===== 修 1：移除 -no-integrated-as，改用 clang 集成汇编器 ====="
+          echo "===== 修 1：移除 -no-integrated-as（已生效）====="
           sed -i '/-no-integrated-as/d' Makefile
-          grep -c 'no-integrated-as' Makefile || echo "已移除"
 
-          echo "===== 修 2：host 工具补 -fcommon ====="
+          echo "===== 修 2：host 工具加 -fcommon —— 追加，绝不覆盖 ====="
+          sed -i '/^KBUILD_HOSTCXXFLAGS/a KBUILD_HOSTCFLAGS += -fcommon' Makefile
+          sed -i '/^KBUILD_HOSTCXXFLAGS/a HOSTCFLAGS += -fcommon' Makefile
+          grep -n 'fcommon' Makefile || true
+
+          echo "===== 复核：genheaders 的 -I 还在 ====="
+          grep -n 'HOST_EXTRACFLAGS' scripts/selinux/genheaders/Makefile
+
           make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                GCC_TOOLCHAIN_DIR=/usr/bin/ \
-               HOST_EXTRACFLAGS="-fcommon" \
                -j$(nproc) Image
           
 
