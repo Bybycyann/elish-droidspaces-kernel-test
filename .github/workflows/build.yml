@@ -1,0 +1,131 @@
+name: Build elish kernel (Droidspaces)
+
+on:
+  workflow_dispatch:          # 只允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04     # 不用 latest，见 2.3 说明
+    timeout-minutes: 350      # 官方单作业上限 6 小时，留余量
+
+    steps:
+      # ---------- 1) 腾磁盘空间 ----------
+      # 官方 runner 磁盘偏紧，内核构建通常不够用
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+
+      # ---------- 2) 构建依赖 ----------
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev build-essential patch \
+            zip unzip rsync cpio python3 device-tree-compiler \
+            libfdt-dev libncurses-dev dwarves xz-utils zstd \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      # ---------- 3) 拉内核源码 ----------
+      - name: Clone kernel source
+        run: |
+          git clone -b elish-r-oss --depth=1 \
+            https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
+
+      # ---------- 4) 下载 AOSP clang ----------
+      # 版本号替换成你验证过的那个
+      - name: Fetch AOSP clang
+        run: |
+          mkdir -p tc/clang
+          wget -q \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r498229b.tar.gz" \
+            -O clang.tar.gz
+          tar xzf clang.tar.gz -C tc/clang
+          ./tc/clang/bin/clang --version
+
+      # ---------- 5) 合入 Droidspaces 配置 ----------
+      - name: Apply Droidspaces config
+        run: |
+          cd kernel
+          cat >> arch/arm64/configs/vendor/elish_user_defconfig <<'CFG'
+
+          # ===== Droidspaces non-GKI (必需) =====
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_PID_NS=y
+          CONFIG_IPC_NS=y
+          CONFIG_CGROUP_DEVICE=y
+          CONFIG_CGROUP_PIDS=y
+          CONFIG_CGROUP_NET_PRIO=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_USER_NS=y
+          # 官方点名：旧内核不关这个，容器内上不了网
+          # CONFIG_ANDROID_PARANOID_NETWORK is not set
+
+          # ===== NAT 模式补强（可选） =====
+          CONFIG_BRIDGE_NETFILTER=y
+          CONFIG_NF_TABLES=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
+          CONFIG_NF_CONNTRACK_NETLINK=y
+          CFG
+
+      # ---------- 6) 打 official non-GKI 补丁 ----------
+      - name: Apply Droidspaces patches
+        run: |
+          git clone -b main --depth=1 \
+            https://github.com/ravindu644/Droidspaces-OSS.git ds
+          cd kernel
+          for p in ../ds/Documentation/resources/kernel-patches/non-GKI/*.patch; do
+            echo "===== $p"
+            if ! patch -p1 --dry-run < "$p"; then
+              echo "!! 补丁冲突，停止"; exit 1
+            fi
+            patch -p1 < "$p"
+          done
+
+      # ---------- 7) 生成 .config 并 fail-fast 复核 ----------
+      - name: Configure and verify switches
+        run: |
+          set -e
+          cd kernel
+          export ARCH=arm64 SUBARCH=arm64
+          export PATH="$PWD/../tc/clang/bin:$PATH"
+          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- elish_user_defconfig
+
+          echo "----- 关键开关复核 -----"
+          missing=0
+          for o in CONFIG_PID_NS CONFIG_IPC_NS CONFIG_SYSVIPC CONFIG_DEVTMPFS \
+                   CONFIG_CGROUP_DEVICE CONFIG_USER_NS CONFIG_POSIX_MQUEUE; do
+            if grep -q "^$o=y" out/.config; then echo "OK   $o"
+            else echo "缺失 $o"; missing=1; fi
+          done
+          grep -q "^# CONFIG_ANDROID_PARANOID_NETWORK is not set" out/.config \
+            || echo "警告: ANDROID_PARANOID_NETWORK 未关闭"
+          [ $missing -eq 0 ] || { echo "致命项缺失，终止"; exit 1; }
+
+      # ---------- 8) 编译 ----------
+      - name: Build Image
+        run: |
+          cd kernel
+          export ARCH=arm64 SUBARCH=arm64
+          export PATH="$PWD/../tc/clang/bin:$PATH"
+          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               -j$(nproc) Image
+
+      # ---------- 9) 上传产物 ----------
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: elish-Image
+          path: |
+            kernel/out/arch/arm64/boot/Image
+            kernel/out/.config
+          retention-days: 30

@@ -1,2 +1,0 @@
-# elish-droidspaces-kernel-test
--
