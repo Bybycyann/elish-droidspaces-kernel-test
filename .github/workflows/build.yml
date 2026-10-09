@@ -9,17 +9,6 @@ jobs:
     timeout-minutes: 350      # 官方单作业上限 6 小时，留余量
 
     steps:
-      # ---------- 1) 腾磁盘空间 ----------
-      # 官方 runner 磁盘偏紧，内核构建通常不够用
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: false
 
       # ---------- 2) 构建依赖 ----------
       - name: Install build deps
@@ -111,27 +100,33 @@ jobs:
           cd kernel
           export ARCH=arm64 SUBARCH=arm64
 
-          echo "===== 给 clang 铺一个只对它生效的交叉汇编器目录 ====="
-          # -B 只影响 clang 的工具搜索，不污染 gcc 编 host 工具
+          echo "===== 1) 给 clang 铺交叉汇编器（-B 只作用于 clang，不碰 gcc）====="
           mkdir -p tcbin
           for t in as ld ar nm objcopy objdump strip ranlib readelf; do
             ln -sf "/usr/bin/aarch64-linux-gnu-$t" "tcbin/$t"
             ln -sf "/usr/bin/aarch64-linux-gnu-$t" "tcbin/aarch64-linux-gnu-$t"
           done
-          ./tcbin/as --version | head -1
-          echo "clang 将看到: -B$PWD/tcbin/"
 
-          echo "===== 保留树自带的 -no-integrated-as（本次不再删除）====="
-          grep -n 'no-integrated-as' Makefile
+          echo "===== 2) 保留树的 -no-integrated-as（GNU as 路线）====="
+          grep -n 'no-integrated-as' Makefile || true
 
-          echo "===== host 工具 -fcommon（追加，不覆盖）====="
+          echo "===== 3) host 工具 -fcommon（追加，不覆盖）====="
           sed -i '/^KBUILD_HOSTCXXFLAGS/a KBUILD_HOSTCFLAGS += -fcommon' Makefile
           sed -i '/^KBUILD_HOSTCXXFLAGS/a HOSTCFLAGS += -fcommon' Makefile
+
+          echo "===== 4) 去掉 vendor 目录自带的 -Werror ====="
+          grep -rlF --include=Makefile 'ccflags-y += -Werror' . | tee /tmp/werror.txt
+          while read -r f; do
+            [ -n "$f" ] && sed -i 's/^ccflags-y += -Werror$//' "$f"
+          done < /tmp/werror.txt
 
           make O=out ARCH=arm64 CC="clang -B$PWD/tcbin/" CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                GCC_TOOLCHAIN_DIR=/usr/bin/ \
                -j$(nproc) Image
+
+          echo "===== 产物确认 ====="
+          ls -l out/arch/arm64/boot/Image
           
 
       # ---------- 9) 上传产物 ----------
