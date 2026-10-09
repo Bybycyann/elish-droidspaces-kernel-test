@@ -111,21 +111,24 @@ jobs:
           cd kernel
           export ARCH=arm64 SUBARCH=arm64
 
-          echo "===== 工具链自检 ====="
-          clang --version | head -2
+          echo "===== 给 clang 铺一个只对它生效的交叉汇编器目录 ====="
+          # -B 只影响 clang 的工具搜索，不污染 gcc 编 host 工具
+          mkdir -p tcbin
+          for t in as ld ar nm objcopy objdump strip ranlib readelf; do
+            ln -sf "/usr/bin/aarch64-linux-gnu-$t" "tcbin/$t"
+            ln -sf "/usr/bin/aarch64-linux-gnu-$t" "tcbin/aarch64-linux-gnu-$t"
+          done
+          ./tcbin/as --version | head -1
+          echo "clang 将看到: -B$PWD/tcbin/"
 
-          echo "===== 修 1：移除 -no-integrated-as（已生效）====="
-          sed -i '/-no-integrated-as/d' Makefile
+          echo "===== 保留树自带的 -no-integrated-as（本次不再删除）====="
+          grep -n 'no-integrated-as' Makefile
 
-          echo "===== 修 2：host 工具加 -fcommon —— 追加，绝不覆盖 ====="
+          echo "===== host 工具 -fcommon（追加，不覆盖）====="
           sed -i '/^KBUILD_HOSTCXXFLAGS/a KBUILD_HOSTCFLAGS += -fcommon' Makefile
           sed -i '/^KBUILD_HOSTCXXFLAGS/a HOSTCFLAGS += -fcommon' Makefile
-          grep -n 'fcommon' Makefile || true
 
-          echo "===== 复核：genheaders 的 -I 还在 ====="
-          grep -n 'HOST_EXTRACFLAGS' scripts/selinux/genheaders/Makefile
-
-          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+          make O=out ARCH=arm64 CC="clang -B$PWD/tcbin/" CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                GCC_TOOLCHAIN_DIR=/usr/bin/ \
                -j$(nproc) Image
